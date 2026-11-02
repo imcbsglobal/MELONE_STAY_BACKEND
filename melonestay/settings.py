@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -14,6 +15,9 @@ INSTALLED_APPS = [
     "corsheaders",
     "accounts",
     "staffs",
+    "room_categories",
+    "room_masters",
+    "ota",
 ]
 
 MIDDLEWARE = [
@@ -34,6 +38,7 @@ CORS_ALLOW_METHODS = [
 
 CORS_ALLOW_HEADERS = [
     "content-type",
+    "authorization",
 ]
 
 STATIC_URL = "/static/"
@@ -64,6 +69,8 @@ DATABASES = {
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", SECRET_KEY)
+JWT_ACCESS_TOKEN_LIFETIME = 60 * 60 * 8
 
 SUPERUSER_API_URL = "https://su.myimc.in/api/superusers/endpoint/MELONESTAY/CYKOWV0Z/"
 SUPERUSER_API_TIMEOUT = 5

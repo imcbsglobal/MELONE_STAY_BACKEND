@@ -1,3 +1,4 @@
 django>=4.2,<5.0
 django-cors-headers>=4.3,<5.0
 requests>=2.31,<3.0
+PyJWT>=2.8,<3.0

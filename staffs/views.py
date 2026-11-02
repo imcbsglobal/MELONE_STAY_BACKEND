@@ -1,8 +1,14 @@
 import json
 
+from django.contrib.auth.hashers import make_password
 from django.http import JsonResponse
-from django.views.decorators.http import require_POST, require_GET
+from django.views.decorators.http import require_GET, require_POST
 
+from accounts.authentication import (
+    get_tenant_client_id,
+    password_matches_and_upgrade,
+    require_jwt,
+)
 from accounts.models import AdminAccount
 
 from .models import Staff
@@ -17,7 +23,6 @@ def _serialize(staff):
         "designation": staff.designation,
         "phone": staff.phone,
         "username": staff.username,
-        "password": staff.password,
         "status": staff.status,
         "created_at": staff.created_at.strftime("%Y-%m-%d %H:%M"),
     }
@@ -25,53 +30,50 @@ def _serialize(staff):
 
 def _load_body(request):
     try:
-        return json.loads(request.body)
+        body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return None
+    return body if isinstance(body, dict) else None
 
 
+@require_jwt("admin")
 @require_GET
 def list_staffs(request):
-    client_id = request.GET.get("client_id", "").strip()
-    if not client_id:
-        return JsonResponse({"error": "client_id is required"}, status=400)
-
+    requested_client_id = request.GET.get("client_id", "").strip() or None
+    client_id = get_tenant_client_id(request, requested_client_id)
+    if client_id is None:
+        return JsonResponse({"error": "You are not authorized to access this client"}, status=403)
     staffs = Staff.objects.filter(client_id=client_id).order_by("-created_at")
-    return JsonResponse({"success": True, "staffs": [_serialize(s) for s in staffs]})
+    return JsonResponse({"success": True, "staffs": [_serialize(staff) for staff in staffs]})
 
 
+@require_jwt("admin")
 @require_POST
 def create_staff(request):
     body = _load_body(request)
     if body is None:
         return JsonResponse({"error": "Invalid request body"}, status=400)
 
-    client_id = body.get("client_id", "").strip()
-    name = body.get("name", "").strip()
-    department = body.get("department", "").strip()
-    designation = body.get("designation", "").strip()
-    phone = body.get("phone", "").strip()
-    username = body.get("username", "").strip()
+    requested_client_id = str(body.get("client_id", "")).strip()
+    client_id = get_tenant_client_id(request, requested_client_id)
+    if client_id is None:
+        return JsonResponse({"error": "You are not authorized to access this client"}, status=403)
+    name = str(body.get("name", "")).strip()
+    department = str(body.get("department", "")).strip()
+    designation = str(body.get("designation", "")).strip()
+    phone = str(body.get("phone", "")).strip()
+    username = str(body.get("username", "")).strip()
     password = body.get("password", "")
-    status = body.get("status", "Active").strip()
+    status = str(body.get("status", "Active")).strip()
 
-    if not all([client_id, name, department, designation, phone, username, password]):
+    if not all([name, department, designation, phone, username]) or not isinstance(password, str) or not password:
         return JsonResponse({"error": "All required fields must be filled"}, status=400)
-
     if any(char.isspace() for char in username):
-        return JsonResponse(
-            {"error": "Username cannot contain spaces"},
-            status=400,
-        )
-
+        return JsonResponse({"error": "Username cannot contain spaces"}, status=400)
     if status not in ("Active", "Inactive"):
         status = "Active"
-
     if Staff.objects.filter(client_id=client_id, username=username).exists():
-        return JsonResponse(
-            {"error": "A staff member with this username already exists"},
-            status=409,
-        )
+        return JsonResponse({"error": "A staff member with this username already exists"}, status=409)
 
     staff = Staff.objects.create(
         client_id=client_id,
@@ -80,87 +82,75 @@ def create_staff(request):
         designation=designation,
         phone=phone,
         username=username,
-        password=password,
+        password=make_password(password),
         status=status,
     )
+    return JsonResponse({"success": True, "staff": _serialize(staff)}, status=201)
 
-    return JsonResponse({"success": True, "staff": _serialize(staff)})
 
-
+@require_jwt("admin")
 @require_POST
 def delete_staff(request):
     body = _load_body(request)
     if body is None:
         return JsonResponse({"error": "Invalid request body"}, status=400)
-
     staff_id = body.get("id")
     if not staff_id:
         return JsonResponse({"error": "Staff id is required"}, status=400)
 
-    client_id = body.get("client_id", "").strip()
-    username = body.get("username", "").strip()
+    requested_client_id = str(body.get("client_id", "")).strip() or None
+    client_id = get_tenant_client_id(request, requested_client_id)
+    username = request.jwt_claims["sub"]
     password = body.get("password", "")
-
-    if not client_id or not username or not password:
+    if client_id is None:
+        return JsonResponse({"error": "You are not authorized to access this client"}, status=403)
+    if not password:
         return JsonResponse({"error": "Admin password is required"}, status=400)
 
     try:
-        staff = Staff.objects.get(id=staff_id)
-    except Staff.DoesNotExist:
+        staff = Staff.objects.get(id=staff_id, client_id=client_id)
+    except (Staff.DoesNotExist, ValueError, TypeError):
         return JsonResponse({"error": "Staff not found"}, status=404)
-
-    if staff.client_id != client_id:
-        return JsonResponse({"error": "Staff not found"}, status=404)
-
-    if not AdminAccount.objects.filter(
-        client_id=client_id,
-        username=username,
-        password=password,
-    ).exists():
+    try:
+        admin = AdminAccount.objects.get(client_id=client_id, username=username)
+    except AdminAccount.DoesNotExist:
+        return JsonResponse({"error": "Admin account not found"}, status=404)
+    if not password_matches_and_upgrade(admin, password):
         return JsonResponse({"error": "Invalid admin password"}, status=403)
 
     staff.delete()
     return JsonResponse({"success": True})
 
 
+@require_jwt("admin")
 @require_POST
 def edit_staff(request):
     body = _load_body(request)
     if body is None:
         return JsonResponse({"error": "Invalid request body"}, status=400)
-
     staff_id = body.get("id")
     if not staff_id:
         return JsonResponse({"error": "Staff id is required"}, status=400)
 
+    client_id = request.jwt_claims["client_id"]
     try:
-        staff = Staff.objects.get(id=staff_id)
-    except Staff.DoesNotExist:
+        staff = Staff.objects.get(id=staff_id, client_id=client_id)
+    except (Staff.DoesNotExist, ValueError, TypeError):
         return JsonResponse({"error": "Staff not found"}, status=404)
 
-    name = body.get("name", "").strip()
-    department = body.get("department", "").strip()
-    designation = body.get("designation", "").strip()
-    phone = body.get("phone", "").strip()
-    username = body.get("username", "").strip()
+    name = str(body.get("name", "")).strip()
+    department = str(body.get("department", "")).strip()
+    designation = str(body.get("designation", "")).strip()
+    phone = str(body.get("phone", "")).strip()
+    username = str(body.get("username", "")).strip()
     password = body.get("password", "")
-    status = body.get("status", "").strip()
-
-    if not all([name, department, designation, phone, username, password]):
+    status = str(body.get("status", "")).strip()
+    if not all([name, department, designation, phone, username]):
         return JsonResponse({"error": "All required fields must be filled"}, status=400)
-
     if any(char.isspace() for char in username):
-        return JsonResponse(
-            {"error": "Username cannot contain spaces"},
-            status=400,
-        )
-
-    if Staff.objects.filter(client_id=staff.client_id, username=username).exclude(id=staff.id).exists():
-        return JsonResponse(
-            {"error": "A staff member with this username already exists"},
-            status=409,
-        )
-
+        return JsonResponse({"error": "Username cannot contain spaces"}, status=400)
+    if Staff.objects.filter(client_id=client_id, username=username).exclude(id=staff.id).exists():
+        return JsonResponse({"error": "A staff member with this username already exists"}, status=409)
     if status not in ("Active", "Inactive"):
         status = "Active"
 
@@ -169,8 +159,8 @@ def edit_staff(request):
     staff.designation = designation
     staff.phone = phone
     staff.username = username
-    staff.password = password
+    if password:
+        staff.password = make_password(password)
     staff.status = status
     staff.save()
-
     return JsonResponse({"success": True, "staff": _serialize(staff)})

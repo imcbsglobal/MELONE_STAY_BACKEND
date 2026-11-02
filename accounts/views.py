@@ -2,8 +2,10 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.http import require_POST, require_GET
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 import requests
 
+from .authentication import issue_access_token, password_matches_and_upgrade, require_jwt
 from .models import AdminAccount
 
 
@@ -42,11 +44,13 @@ def superuser_login(request):
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
 
-    username = body.get("username", "").strip()
+    username = str(body.get("username", "")).strip()
     password = body.get("password", "")
 
-    if not username or not password:
+    if not username or not isinstance(password, str) or not password:
         return JsonResponse({"error": "Username and password are required"}, status=400)
 
     try:
@@ -84,6 +88,10 @@ def superuser_login(request):
             "success": True,
             "username": api_data.get("username", ""),
             "project_name": api_data.get("project_name", ""),
+            "token": issue_access_token(
+                subject=api_data.get("username", ""),
+                role="superuser",
+            ),
         })
     else:
         return JsonResponse(
@@ -93,13 +101,16 @@ def superuser_login(request):
 
 
 @require_POST
+@require_jwt("superuser")
 def fetch_client(request):
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
 
-    client_id = body.get("client_id", "").strip()
+    client_id = str(body.get("client_id", "")).strip()
     if not client_id:
         return JsonResponse({"error": "Gmail is required"}, status=400)
 
@@ -161,23 +172,26 @@ def fetch_client(request):
 
 
 @require_POST
+@require_jwt("superuser")
 def create_admin(request):
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
 
-    client_id = body.get("client_id", "").strip()
-    customer_name = body.get("customer_name", "").strip()
-    license_key = body.get("license_key", "").strip()
-    package = body.get("package", "").strip()
-    module_name = body.get("module_name", "").strip()
-    expiry_date = body.get("expiry_date", "").strip()
-    status_val = body.get("status", "Active").strip()
-    username = body.get("username", "").strip()
+    client_id = str(body.get("client_id", "")).strip()
+    customer_name = str(body.get("customer_name", "")).strip()
+    license_key = str(body.get("license_key", "")).strip()
+    package = str(body.get("package", "")).strip()
+    module_name = str(body.get("module_name", "")).strip()
+    expiry_date = str(body.get("expiry_date", "")).strip()
+    status_val = str(body.get("status", "Active")).strip()
+    username = str(body.get("username", "")).strip()
     password = body.get("password", "")
 
-    if not all([client_id, customer_name, license_key, username, password]):
+    if not all([client_id, customer_name, license_key, username]) or not isinstance(password, str) or not password:
         return JsonResponse({"error": "All required fields must be filled"}, status=400)
 
     if AdminAccount.objects.filter(username=username).exists():
@@ -198,7 +212,7 @@ def create_admin(request):
         expiry_date=expiry_date,
         status=status_val,
         username=username,
-        password=password,
+        password=make_password(password),
     )
 
     return JsonResponse({
@@ -219,12 +233,14 @@ def admin_login(request):
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
 
-    client_id = body.get("client_id", "").strip()
-    username = body.get("username", "").strip()
+    client_id = str(body.get("client_id", "")).strip()
+    username = str(body.get("username", "")).strip()
     password = body.get("password", "")
 
-    if not client_id or not username or not password:
+    if not client_id or not username or not isinstance(password, str) or not password:
         return JsonResponse(
             {"error": "Gmail, username and password are required"},
             status=400,
@@ -238,7 +254,7 @@ def admin_login(request):
     if admin.client_id != client_id:
         return JsonResponse({"error": "Invalid credentials"}, status=401)
 
-    if admin.password != password:
+    if not password_matches_and_upgrade(admin, password):
         return JsonResponse({"error": "Invalid credentials"}, status=401)
 
     live_status = _live_client_status(client_id)
@@ -261,16 +277,25 @@ def admin_login(request):
             "module_name": admin.module_name,
             "expiry_date": admin.expiry_date,
         },
+        "token": issue_access_token(
+            subject=admin.username,
+            role="admin",
+            client_id=admin.client_id,
+        ),
     })
 
 
 @require_GET
+@require_jwt("admin")
 def check_member_status(request):
-    client_id = request.GET.get("client_id", "").strip()
-    username = request.GET.get("username", "").strip()
-
-    if not client_id or not username:
-        return JsonResponse({"error": "gmail and username are required"}, status=400)
+    client_id = request.jwt_claims["client_id"]
+    username = request.jwt_claims["sub"]
+    requested_client_id = request.GET.get("client_id", "").strip()
+    requested_username = request.GET.get("username", "").strip()
+    if requested_client_id and requested_client_id != client_id:
+        return JsonResponse({"error": "You are not authorized to access this account"}, status=403)
+    if requested_username and requested_username != username:
+        return JsonResponse({"error": "You are not authorized to access this account"}, status=403)
 
     try:
         admin = AdminAccount.objects.get(client_id=client_id, username=username)
@@ -287,6 +312,7 @@ def check_member_status(request):
 
 
 @require_GET
+@require_jwt("superuser")
 def list_admins(request):
     admins = AdminAccount.objects.all().order_by("-created_at")
 
@@ -312,17 +338,19 @@ def list_admins(request):
             "expiry_date": a.expiry_date,
             "status": a.status,
             "username": a.username,
-            "password": a.password,
             "created_at": a.created_at.strftime("%Y-%m-%d %H:%M"),
         })
     return JsonResponse({"success": True, "admins": data})
 
 
 @require_POST
+@require_jwt("superuser")
 def delete_admin(request):
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
         return JsonResponse({"error": "Invalid request body"}, status=400)
 
     admin_id = body.get("id")
@@ -360,14 +388,17 @@ def delete_admin(request):
 
 
 @require_POST
+@require_jwt("superuser")
 def edit_admin(request):
     try:
         body = json.loads(request.body)
     except (json.JSONDecodeError, ValueError):
         return JsonResponse({"error": "Invalid request body"}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid request body"}, status=400)
 
     admin_id = body.get("id")
-    new_username = body.get("username", "").strip()
+    new_username = str(body.get("username", "")).strip()
     new_password = body.get("password", "")
     superuser_password = body.get("superuser_password", "")
 
@@ -377,10 +408,7 @@ def edit_admin(request):
     if not new_username:
         return JsonResponse({"error": "Username is required"}, status=400)
 
-    if not new_password:
-        return JsonResponse({"error": "Password is required"}, status=400)
-
-    if not superuser_password:
+    if not isinstance(new_password, str) or not isinstance(superuser_password, str) or not superuser_password:
         return JsonResponse({"error": "Superuser password is required"}, status=400)
 
     try:
@@ -408,7 +436,10 @@ def edit_admin(request):
         return JsonResponse({"error": "Username already exists"}, status=409)
 
     admin.username = new_username
-    admin.password = new_password
-    admin.save(update_fields=["username", "password"])
+    update_fields = ["username"]
+    if new_password:
+        admin.password = make_password(new_password)
+        update_fields.append("password")
+    admin.save(update_fields=update_fields)
 
     return JsonResponse({"success": True})
