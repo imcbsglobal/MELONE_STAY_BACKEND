@@ -17,6 +17,9 @@ class Staff(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="Active")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "melonestay_staff"
+
     def __str__(self):
         return f"{self.name} ({self.department})"
 

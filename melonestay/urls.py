@@ -6,4 +6,6 @@ urlpatterns = [
     path("api/room-categories/", include("room_categories.urls")),
     path("api/room-master/", include("room_masters.urls")),
     path("api/ota/", include("ota.urls")),
+    path("api/tax-master/", include("tax_master.urls")),
+    path("api/currency-master/", include("currency_master.urls")),
 ]

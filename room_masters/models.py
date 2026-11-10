@@ -33,6 +33,7 @@ class Room(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "melonestay_room"
         ordering = ["code", "id"]
         constraints = [
             models.UniqueConstraint(
@@ -51,6 +52,7 @@ class RoomPrice(models.Model):
     amount = models.DecimalField(max_digits=10, decimal_places=2)
 
     class Meta:
+        db_table = "melonestay_roomprice"
         ordering = ["id"]
 
     def __str__(self):

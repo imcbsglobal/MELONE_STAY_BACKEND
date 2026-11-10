@@ -7,6 +7,7 @@ class RoomCategory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = "melonestay_roomcategory"
         ordering = ["name", "id"]
         constraints = [
             models.UniqueConstraint(

@@ -5,3 +5,9 @@ __pycache__/
 .env
 __pycache__/
 *.py[cod]
+
+# Log files
+*.log
+
+# Server PID files
+*.pid

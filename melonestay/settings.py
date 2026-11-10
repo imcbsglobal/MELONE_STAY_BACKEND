@@ -18,6 +18,8 @@ INSTALLED_APPS = [
     "room_categories",
     "room_masters",
     "ota",
+    "tax_master",
+    "currency_master",
 ]
 
 MIDDLEWARE = [
@@ -31,8 +33,11 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_METHODS = [
+    "DELETE",
     "GET",
+    "PATCH",
     "POST",
+    "PUT",
     "OPTIONS",
 ]
 
@@ -61,14 +66,20 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "melonestay.wsgi.application"
 
+# PostgreSQL Database Configuration
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "Livemenu",
+        "USER": "postgres",
+        "PASSWORD": "12345",
+        "HOST": "127.0.0.1",
+        "PORT": "5432",
     }
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
 JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY", SECRET_KEY)
 JWT_ACCESS_TOKEN_LIFETIME = 60 * 60 * 8
 
@@ -77,3 +88,36 @@ SUPERUSER_API_TIMEOUT = 5
 
 PROJECT_API_URL = "https://activate.imcbs.com/mobileapp/api/project/melonestay/"
 PROJECT_API_TIMEOUT = 2
+
+USER_MASTER_API_URL = "https://centralmastermanagement.imcbs.com/api/user-master/"
+USER_MASTER_API_TIMEOUT = 10
+
+# Logging Configuration
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.FileHandler',
+            'filename': BASE_DIR / 'signup.log',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'accounts': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
